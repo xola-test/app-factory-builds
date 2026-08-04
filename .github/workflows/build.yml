@@ -1,0 +1,180 @@
+# The central build pipeline for Xola embedded apps (PHASE-3 WC-2).
+#
+# Only this pipeline produces publishable or previewable artifacts. It checks
+# out the target repo read-only with a GitHub App installation token, builds
+# in a pinned toolchain with lifecycle scripts disabled, validates the
+# manifest, enforces size budgets, computes the content hash, and reports the
+# result to elrond with an OIDC token (W0-5). Author-controlled CI is never
+# trusted or ingested.
+#
+# Optional inputs make dry-runs possible before infrastructure exists:
+# without buildId/callbackUrl there is no elrond callback, and without an
+# AWS role the upload step is skipped.
+name: build
+
+on:
+    workflow_dispatch:
+        inputs:
+            appId:
+                description: Registry app id
+                required: true
+                type: string
+            org:
+                description: Source org
+                required: true
+                type: string
+            repo:
+                description: Source repo
+                required: true
+                type: string
+            gitSha:
+                description: Commit sha to build
+                required: true
+                type: string
+            channel:
+                description: Build channel
+                required: true
+                type: choice
+                options: [preview, release]
+            buildId:
+                description: Elrond Build record id (omit for a dry-run)
+                required: false
+                type: string
+            callbackUrl:
+                description: Elrond base URL for the result callback (omit for a dry-run)
+                required: false
+                type: string
+            registryUrl:
+                description: Elrond base URL for trigger-location validation (omit to skip)
+                required: false
+                type: string
+
+permissions:
+    contents: read
+    id-token: write
+
+concurrency:
+    group: build-${{ inputs.appId }}-${{ inputs.gitSha }}-${{ inputs.channel }}
+
+env:
+    # Pinned toolchain: every artifact is built by a known Node version.
+    NODE_VERSION: "20.19.5"
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout pipeline
+              uses: actions/checkout@v4
+              with:
+                  path: pipeline
+                  persist-credentials: false
+
+            - name: Mint installation token for the target repo
+              id: app-token
+              uses: actions/create-github-app-token@v1
+              with:
+                  app-id: ${{ secrets.APP_FACTORY_APP_ID }}
+                  private-key: ${{ secrets.APP_FACTORY_PRIVATE_KEY }}
+                  owner: ${{ inputs.org }}
+                  repositories: ${{ inputs.repo }}
+
+            - name: Checkout target at sha (read-only)
+              uses: actions/checkout@v4
+              with:
+                  repository: ${{ inputs.org }}/${{ inputs.repo }}
+                  ref: ${{ inputs.gitSha }}
+                  token: ${{ steps.app-token.outputs.token }}
+                  path: target
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+
+            - name: Install pipeline tooling
+              working-directory: pipeline
+              run: npm ci --ignore-scripts
+
+            - name: Install target dependencies (lifecycle scripts disabled)
+              working-directory: target
+              run: npm ci --ignore-scripts
+
+            - name: Validate the authored manifest
+              working-directory: pipeline
+              run: node scripts/validate-manifest.mjs ../target/xola-embedded-app.json --app-id "${{ inputs.appId }}" ${{ inputs.registryUrl && format('--registry-url {0}', inputs.registryUrl) || '' }}
+
+            - name: Build
+              working-directory: target
+              run: npm run build
+
+            - name: Verify the bundle contract
+              run: |
+                  test -f target/dist/index.html || { echo "dist/index.html is missing"; exit 1; }
+                  test -f target/dist/xola-embedded-app.json || { echo "dist/xola-embedded-app.json is missing"; exit 1; }
+
+            - name: Enforce size budgets
+              working-directory: pipeline
+              run: node scripts/check-budgets.mjs ../target/dist --report ../size-report.json
+
+            # TODO(WC-5): semgrep and socket.dev scans go here; scanReport
+            # feeds the callback below. Until then an empty report is sent.
+            - name: Security scan placeholder
+              run: echo '{"status":"not_implemented","findings":[]}' > scan-report.json
+
+            - name: Finalize bundle (content hash, checksums, stamped manifest)
+              working-directory: pipeline
+              run: |
+                  node scripts/finalize-bundle.mjs ../target/dist \
+                      --git-sha "${{ inputs.gitSha }}" \
+                      --pipeline "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                      --out ../bundle-info.json
+
+            - name: Configure AWS credentials
+              if: vars.AWS_UPLOAD_ROLE_ARN != ''
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ vars.AWS_UPLOAD_ROLE_ARN }}
+                  aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+            - name: Upload bundle to S3
+              if: vars.AWS_UPLOAD_ROLE_ARN != ''
+              run: |
+                  BUNDLE_SHA=$(node -p "require('./bundle-info.json').bundleSha256")
+                  if [ "${{ inputs.channel }}" = "release" ]; then
+                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/${{ inputs.appId }}/${BUNDLE_SHA}/"
+                  else
+                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/preview/${{ inputs.appId }}/${{ inputs.gitSha }}/"
+                  fi
+                  aws s3 cp target/dist "$DEST" --recursive
+                  echo "uploaded to $DEST"
+
+            - name: Report result to elrond
+              if: inputs.buildId != '' && inputs.callbackUrl != ''
+              run: |
+                  pipeline/scripts/report-result.sh \
+                      "${{ inputs.callbackUrl }}" "${{ inputs.buildId }}" ready \
+                      "$(node -p "require('./bundle-info.json').bundleSha256")" \
+                      "size-report.json" "scan-report.json"
+
+            - name: Report failure to elrond
+              if: failure() && inputs.buildId != '' && inputs.callbackUrl != ''
+              run: |
+                  pipeline/scripts/report-result.sh \
+                      "${{ inputs.callbackUrl }}" "${{ inputs.buildId }}" failed "" "" ""
+
+            - name: Publish run summary
+              if: always()
+              run: |
+                  echo "## Build summary" >> "$GITHUB_STEP_SUMMARY"
+                  echo "- app: ${{ inputs.appId }} (${{ inputs.org }}/${{ inputs.repo }} @ ${{ inputs.gitSha }})" >> "$GITHUB_STEP_SUMMARY"
+                  echo "- channel: ${{ inputs.channel }}" >> "$GITHUB_STEP_SUMMARY"
+                  if [ -f bundle-info.json ]; then
+                      echo "- bundleSha256: $(node -p "require('./bundle-info.json').bundleSha256")" >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  if [ -f size-report.json ]; then
+                      echo '```json' >> "$GITHUB_STEP_SUMMARY"
+                      cat size-report.json >> "$GITHUB_STEP_SUMMARY"
+                      echo '```' >> "$GITHUB_STEP_SUMMARY"
+                  fi

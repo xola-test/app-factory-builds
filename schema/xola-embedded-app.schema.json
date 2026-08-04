@@ -1,0 +1,210 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://developers.xola.com/schemas/embedded-app/2026-08/xola-embedded-app.schema.json",
+    "title": "Xola Embedded App Manifest (xola-embedded-app.json)",
+    "description": "Per-version manifest bundled with every embedded app. Declares what the app IS (identity), WHERE it appears in the Seller app (triggers + canvas), and WHAT it may access (API scopes, context fields, metadata namespaces). It deliberately does NOT contain store-listing content (name, descriptions, logo, contacts); that content lives on the registry record. The copy in the app's source repo is the author's declaration. The copy inside a built bundle additionally carries a CI-stamped `build` block. The registry's copy is canonical at publish time (PHASE-3 section 3.6).",
+    "type": "object",
+    "required": ["schemaVersion", "id", "version", "apiVersion", "triggers", "canvas"],
+    "additionalProperties": false,
+    "patternProperties": {
+        "^x-": {
+            "$comment": "Extension prefix: keys prefixed x- are ignored by Xola tooling and reserved for author/tooling annotations. Every other unknown key is rejected so typos fail with a clear error."
+        }
+    },
+    "properties": {
+        "schemaVersion": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}$",
+            "description": "The manifest schema edition this file is written against, as a YYYY-MM date (e.g. \"2026-08\"). Additive schema changes do not create a new edition; breaking changes do. Validators must reject editions they do not know.",
+            "examples": ["2026-08"]
+        },
+        "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$",
+            "maxLength": 128,
+            "description": "Globally unique, immutable app identifier in reverse-DNS style (e.g. \"com.example.refund-helper\"). Must match the registry app record it publishes to; a mismatch fails CI. Never changes across versions.",
+            "examples": ["com.example.refund-helper", "com.xola.seat-assignment"]
+        },
+        "version": {
+            "type": "string",
+            "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z-.]+)?$",
+            "description": "Author-facing semantic version of this app release (e.g. \"1.4.2\"). It provides human-meaningful ordering only. The identity of what actually ships is (gitSha, bundleSha256), stamped by CI into the `build` block. The registry keeps its own integer counter independently.",
+            "examples": ["1.4.2", "2.0.0-beta.1"]
+        },
+        "apiVersion": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "The Xola API date version this app was written against (e.g. \"2025-07-07\"). The SDK declares it in the handshake and injects it as X-API-Version on every xola.fetch() call (PHASE-1 section 1.5). This pins API behavior for the life of the version.",
+            "examples": ["2025-07-07"]
+        },
+        "entry": {
+            "type": "string",
+            "pattern": "^[^/].*\\.html$",
+            "default": "index.html",
+            "description": "Bundle-relative path to the iframe entrypoint document. Almost always the default \"index.html\". Must be a path inside the bundle (no leading slash, no ..)."
+        },
+        "triggers": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Where and how the app is invoked in the Seller app. Each trigger binds one trigger location (from the live trigger-location registry) to a trigger type, with a label and icon when the trigger is visible. This is the structure elrond and the Developer Center already implement (ui.triggers[]). Whether the referenced location exists, supports the trigger type, and supports the app's canvas type is validated against the live registry by the shared validation library. Those rules cannot live in a static schema.",
+            "items": { "$ref": "#/$defs/trigger" }
+        },
+        "canvas": { "$ref": "#/$defs/canvas" },
+        "apiScopes": {
+            "type": "array",
+            "uniqueItems": true,
+            "default": [],
+            "description": "Xola API scopes the app needs, fed into the scoped-token mint at session start (PHASE-1 section 1.6). Request the minimum: every scope expansion between versions is diffed and flagged to the human reviewer. Metadata scopes must reference a namespace declared in metadataNamespaces (checked by the validation library).",
+            "items": {
+                "type": "string",
+                "pattern": "^(read|write):[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$",
+                "examples": ["read:purchases", "write:metadata:refund-helper"]
+            }
+        },
+        "requestedContextFields": {
+            "type": "array",
+            "uniqueItems": true,
+            "default": [],
+            "description": "Subset of the trigger locations' availableContext the app wants in its handshake payload, as dot-paths (e.g. \"purchase.id\"). Must be a subset of what every declared trigger location offers. This is validated against the live registry.",
+            "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)*$",
+                "examples": ["purchase.id", "event.id"]
+            }
+        },
+        "metadataNamespaces": {
+            "type": "array",
+            "uniqueItems": true,
+            "default": [],
+            "description": "Metadata namespaces (PHASE-2) this app reads/writes. Declaring a namespace here is what makes read:metadata:<ns> / write:metadata:<ns> scopes mintable for it.",
+            "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]*$",
+                "maxLength": 64,
+                "examples": ["refund-helper"]
+            }
+        },
+        "build": { "$ref": "#/$defs/buildStamp" }
+    },
+    "allOf": [
+        {
+            "$comment": "Fullscreen canvas is reachable only via left-menu navigation, so every trigger must be a menuItem (PHASE-1 section 1.2).",
+            "if": {
+                "required": ["canvas"],
+                "properties": { "canvas": { "required": ["type"], "properties": { "type": { "const": "fullscreen" } } } }
+            },
+            "then": {
+                "properties": { "triggers": { "items": { "properties": { "type": { "const": "menuItem" } } } } }
+            }
+        },
+        {
+            "$comment": "A canvas-less (hidden) app has nothing to click, so every trigger must be automatic (PHASE-1 section 1.2).",
+            "if": {
+                "required": ["canvas"],
+                "properties": { "canvas": { "required": ["type"], "properties": { "type": { "const": "none" } } } }
+            },
+            "then": {
+                "properties": { "triggers": { "items": { "properties": { "type": { "const": "automatic" } } } } }
+            }
+        }
+    ],
+    "$defs": {
+        "trigger": {
+            "type": "object",
+            "required": ["type", "location"],
+            "additionalProperties": false,
+            "properties": {
+                "type": {
+                    "enum": ["button", "menuItem", "automatic"],
+                    "description": "What causes the app to mount: a visible button, a left-menu item, or automatic (mounts with the page, no user action)."
+                },
+                "location": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)+$",
+                    "description": "Trigger-location ID from the live registry (e.g. \"purchases.detail.headerBar\"). Existence, supportedTriggerTypes, supportedCanvasTypes, and firstPartyOnly rules are validated against the registry at build and review time.",
+                    "examples": ["purchases.detail.headerBar", "dashboard.roster.headerBar"]
+                },
+                "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "Text rendered on the button or menu item. Required for visible trigger types; forbidden for automatic."
+                },
+                "icon": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Icon name from the @xola/ui-kit icon registry (e.g. \"refund\"). Validated against the registry by the validation library. Required for visible trigger types; forbidden for automatic."
+                }
+            },
+            "allOf": [
+                {
+                    "if": { "properties": { "type": { "enum": ["button", "menuItem"] } }, "required": ["type"] },
+                    "then": { "required": ["label", "icon"] }
+                },
+                {
+                    "if": { "properties": { "type": { "const": "automatic" } }, "required": ["type"] },
+                    "then": { "properties": { "label": false, "icon": false } }
+                }
+            ]
+        },
+        "canvas": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "description": "How the app surface renders when activated. One canvas per app (PHASE-1 section 1.2). Field names map 1:1 onto elrond's flat ui.canvas* fields: type -> canvasType, size -> canvasSize, location -> canvasLocation, presentation -> canvasPresentation.",
+            "properties": {
+                "type": {
+                    "enum": ["none", "drawer", "modal", "fullscreen"],
+                    "description": "none = hidden app (toasts/API only); drawer = slide-out panel; modal = overlay dialog; fullscreen = replaces the current view."
+                },
+                "size": {
+                    "enum": ["small", "medium", "large", "xl", "2xl"],
+                    "description": "Surface size. Drawer: small(288px)|medium(340px)|large(440px)|xl(500px)|2xl(700px), matching @xola/ui-kit Drawer. Modal: small|medium|large only."
+                },
+                "location": {
+                    "enum": ["left", "right"],
+                    "description": "Which edge a drawer slides from. Drawer only."
+                },
+                "presentation": {
+                    "enum": ["overlay", "push"],
+                    "default": "overlay",
+                    "description": "Whether a drawer overlays the page content or pushes it aside. Drawer only."
+                }
+            },
+            "allOf": [
+                {
+                    "if": { "properties": { "type": { "const": "drawer" } }, "required": ["type"] },
+                    "then": { "required": ["size", "location"] }
+                },
+                {
+                    "if": { "properties": { "type": { "const": "modal" } }, "required": ["type"] },
+                    "then": {
+                        "required": ["size"],
+                        "properties": {
+                            "size": { "enum": ["small", "medium", "large"] },
+                            "location": false,
+                            "presentation": false
+                        }
+                    }
+                },
+                {
+                    "if": { "properties": { "type": { "enum": ["fullscreen", "none"] } }, "required": ["type"] },
+                    "then": { "properties": { "size": false, "location": false, "presentation": false } }
+                }
+            ]
+        },
+        "buildStamp": {
+            "type": "object",
+            "required": ["gitSha", "bundleSha256", "builtAt"],
+            "additionalProperties": false,
+            "description": "Artifact provenance, STAMPED BY CI into the manifest copy inside the built bundle. Authors never write this block: it cannot be known before the build exists (the commit cannot contain its own hash), and hand-written values would be false information. CI rejects a source manifest that contains it. Present here so the stamped bundle copy validates against this same schema.",
+            "properties": {
+                "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$", "description": "Commit the bundle was built from." },
+                "gitRef": { "type": "string", "description": "Branch or tag name at build time (informational; the sha is authoritative)." },
+                "bundleSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Content hash of the bundle: the immutability primitive and the bundle's identity." },
+                "builtAt": { "type": "string", "format": "date-time" },
+                "pipeline": { "type": "string", "description": "Identifier of the CI run that produced the bundle (for tracing back to logs)." }
+            }
+        }
+    }
+}
