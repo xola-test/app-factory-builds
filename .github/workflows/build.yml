@@ -74,7 +74,8 @@ jobs:
               id: app-token
               uses: actions/create-github-app-token@v1
               with:
-                  app-id: ${{ secrets.APP_FACTORY_APP_ID }}
+                  # The App id is public information; only the key is a secret.
+                  app-id: ${{ vars.APP_FACTORY_APP_ID }}
                   private-key: ${{ secrets.APP_FACTORY_PRIVATE_KEY }}
                   owner: ${{ inputs.org }}
                   repositories: ${{ inputs.repo }}

@@ -29,11 +29,15 @@ canonical.
 
 ## Setup (per environment)
 
-Repo secrets:
+Repo secret:
 
-- `APP_FACTORY_APP_ID`: the GitHub App id.
 - `APP_FACTORY_PRIVATE_KEY`: the App's private key PEM. The App must be
   installed on every source org the pipeline builds from.
+
+Repo variables:
+
+- `APP_FACTORY_APP_ID`: the GitHub App id (public information, so a
+  variable, not a secret).
 
 Repo variables (all optional until their infrastructure exists):
 
