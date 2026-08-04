@@ -1,0 +1,22 @@
+env             = "prod"
+region          = "us-east-1"
+api_origin      = "https://api.xola.app"
+frame_ancestors = ["https://seller.xola.app"]
+pipeline_repo   = "xola/app-factory-builds"
+
+release_aliases     = ["embeddedapps.xola.app"]
+preview_aliases     = ["preview.embeddedapps.xola.app"]
+acm_certificate_arn = "arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT_ID"
+
+# Generate the preview signing key pair (private half goes to the cookie
+# minting service, WC-7; only the public half goes here):
+#   openssl genrsa -out preview-signer.pem 2048
+#   openssl rsa -pubout -in preview-signer.pem -out preview-signer.pub
+preview_public_key_pem = <<-EOT
+-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----
+EOT
+
+# Set when the account already has the GitHub OIDC provider:
+# existing_oidc_provider_arn = "arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com"

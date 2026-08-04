@@ -1,1 +1,4 @@
 node_modules/
+infra/.terraform/
+*.tfstate*
+infra/environments/*.tfvars

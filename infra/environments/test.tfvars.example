@@ -1,0 +1,7 @@
+# Throwaway test environment: default CloudFront domains, no signed cookies.
+env             = "test"
+region          = "us-east-1"
+api_origin      = "https://api.sandbox.xola.app"
+frame_ancestors = ["https://seller.sandbox.xola.app", "http://localhost:3000"]
+pipeline_repo   = "xola-test/app-factory-builds"
+# preview_public_key_pem omitted: preview will be OPEN (warned in outputs).
