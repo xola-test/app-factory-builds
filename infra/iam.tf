@@ -38,7 +38,15 @@ data "aws_iam_policy_document" "pipeline_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.pipeline_repo}:*"]
+      # GitHub embeds immutable org and repo ids in newer sub claims
+      # (repo:org@<id>/name@<id>:ref:...) to prevent trust inheritance by
+      # recreated names. Accept both formats. Hardening option for prod:
+      # replace the wildcarded ids with the literal ones, which makes trust
+      # rename-proof and recreation-proof.
+      values = [
+        "repo:${var.pipeline_repo}:*",
+        "repo:${join("@*/", split("/", var.pipeline_repo))}@*:*",
+      ]
     }
   }
 }

@@ -132,11 +132,6 @@ jobs:
                       --pipeline "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                       --out ../bundle-info.json
 
-            - name: Debug OIDC claims (temporary)
-              run: |
-                  TOKEN=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" | node -p "JSON.parse(require('fs').readFileSync(0)).value")
-                  echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | node -p "const c=JSON.parse(require('fs').readFileSync(0)); JSON.stringify({iss:c.iss,aud:c.aud,sub:c.sub,repository:c.repository}, null, 2)"
-
             - name: Configure AWS credentials
               if: vars.AWS_UPLOAD_ROLE_ARN != ''
               uses: aws-actions/configure-aws-credentials@v4
