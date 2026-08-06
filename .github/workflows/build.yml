@@ -48,6 +48,10 @@ on:
                 description: Elrond base URL for trigger-location validation (omit to skip)
                 required: false
                 type: string
+            cdnBase:
+                description: Public CDN base for this channel, used to report bundleUrl (omit to skip)
+                required: false
+                type: string
 
 permissions:
     contents: read
@@ -144,12 +148,19 @@ jobs:
               run: |
                   BUNDLE_SHA=$(node -p "require('./bundle-info.json').bundleSha256")
                   if [ "${{ inputs.channel }}" = "release" ]; then
-                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/${{ inputs.appId }}/${BUNDLE_SHA}/"
+                      KEY="${{ inputs.appId }}/${BUNDLE_SHA}"
+                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/${KEY}/"
                   else
-                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/preview/${{ inputs.appId }}/${{ inputs.gitSha }}/"
+                      # The preview distribution has origin_path /preview, so the
+                      # public path omits that prefix.
+                      KEY="${{ inputs.appId }}/${{ inputs.gitSha }}"
+                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/preview/${KEY}/"
                   fi
                   aws s3 cp target/dist "$DEST" --recursive
                   echo "uploaded to $DEST"
+                  if [ -n "${{ inputs.cdnBase }}" ]; then
+                      echo "BUNDLE_URL=${{ inputs.cdnBase }}/${KEY}/index.html" >> "$GITHUB_ENV"
+                  fi
 
             - name: Report result to elrond
               if: inputs.buildId != '' && inputs.callbackUrl != ''
