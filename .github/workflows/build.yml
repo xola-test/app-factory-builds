@@ -123,10 +123,14 @@ jobs:
               working-directory: pipeline
               run: node scripts/check-budgets.mjs ../target/dist --report ../size-report.json
 
-            # TODO(WC-5): semgrep and socket.dev scans go here; scanReport
-            # feeds the callback below. Until then an empty report is sent.
-            - name: Security scan placeholder
-              run: echo '{"status":"not_implemented","findings":[]}' > scan-report.json
+            - name: Install semgrep
+              run: pipx install semgrep
+
+            # Runs before upload and before the callback, so a blocking finding
+            # stops the artifact from being published at all.
+            - name: Security scan
+              working-directory: pipeline
+              run: node scripts/scan.mjs ../target --out ../scan-report.json
 
             - name: Finalize bundle (content hash, checksums, stamped manifest)
               working-directory: pipeline

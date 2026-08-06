@@ -15,7 +15,7 @@ validate authored manifest            (vendored schema + registry cross-check)
 npm run build                         (target's own build)
 verify dist/index.html + dist/xola-embedded-app.json
 enforce size budgets                  (per canvas type, warn + hard tiers)
-security scan                         (placeholder until WC-5)
+security scan                         (semgrep + dependency advisories)
 finalize bundle                       (bundleSha256, checksums.json, stamped manifest)
 upload to S3                          (skipped until the WC-1 role is configured)
 report to elrond                      (OIDC token; skipped without buildId/callbackUrl)
@@ -57,6 +57,41 @@ gh workflow run build.yml -R <org>/app-factory-builds \
   -f appId=com.example.my-app -f org=<org> -f repo=<app-repo> \
   -f gitSha=<sha> -f channel=preview
 ```
+
+## Security scanning (WC-5)
+
+`scripts/scan.mjs` runs static analysis and dependency advisories, then writes
+one normalized `scanReport` that the registry Build record stores and the
+reviewer UI renders.
+
+What blocks a build:
+
+- any ERROR-severity static finding
+- a high or critical advisory in a **production** dependency, because those
+  ship inside the bundle
+
+What warns without blocking: everything else, including advisories in
+build-only dependencies. Those do not reach a seller's browser, but a
+compromised build-time package is still worth surfacing.
+
+The rules in `semgrep/xola-embedded-app.yml` are the ones that exist because of
+how embedded apps are hosted, rather than generic JavaScript hygiene (which the
+registry rulesets cover): no tokens in browser storage (every app shares one
+origin until per-app subdomains ship), no wildcard `postMessage` target origin,
+no `eval` or runtime script injection, and warnings for external network calls
+the bundle CSP would block anyway.
+
+Socket.dev is wired but inert: it runs only where `SOCKET_SECURITY_API_KEY` is
+configured, and reports itself as skipped everywhere else.
+
+Run it locally against any app repo:
+
+```sh
+node scripts/scan.mjs ../path/to/app --out scan-report.json
+```
+
+Without semgrep installed it reports that scanner as skipped rather than
+passing silently.
 
 ## Scripts
 

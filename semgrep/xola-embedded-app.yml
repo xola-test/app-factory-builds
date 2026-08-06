@@ -1,0 +1,97 @@
+# Xola embedded-app security rules (WC-5).
+#
+# These encode the Phase 1 runtime constraints that a reviewer would otherwise
+# check by hand. They are deliberately narrow: generic JavaScript hygiene comes
+# from the registry rulesets, while everything here is a rule that exists
+# because of how embedded apps are hosted and authenticated.
+rules:
+    - id: xola-token-in-browser-storage
+      languages: [javascript, typescript]
+      severity: ERROR
+      message: >-
+          Do not put tokens, keys, or credentials in browser storage. Every embedded app is
+          served from one shared origin until per-app subdomains ship, so any other app loaded
+          on that origin can read this value (PHASE-1 section 1.4). Keep the token in memory
+          and call xola.auth.getToken() when you need it.
+      patterns:
+          - pattern-either:
+                - pattern: localStorage.setItem($KEY, ...)
+                - pattern: sessionStorage.setItem($KEY, ...)
+                - pattern: window.localStorage.setItem($KEY, ...)
+                - pattern: window.sessionStorage.setItem($KEY, ...)
+          - metavariable-regex:
+                metavariable: $KEY
+                regex: (?i).*(token|api[-_]?key|secret|password|credential|auth|bearer|session).*
+
+    - id: xola-cookie-write
+      languages: [javascript, typescript]
+      severity: WARNING
+      message: >-
+          Cookies set here are visible to every embedded app on the shared origin
+          (PHASE-1 section 1.4). Prefer in-memory state, and never store a token or PII.
+      pattern: document.cookie = $VALUE
+
+    - id: xola-eval
+      languages: [javascript, typescript]
+      severity: ERROR
+      message: >-
+          eval and Function constructors execute arbitrary strings. The bundle CSP sets
+          script-src 'self', so this fails at runtime, and it defeats review of what the app
+          actually does.
+      patterns:
+          - pattern-either:
+                - pattern: eval(...)
+                - pattern: new Function(...)
+                - pattern: Function(...)
+
+    - id: xola-postmessage-wildcard
+      languages: [javascript, typescript]
+      severity: ERROR
+      message: >-
+          postMessage with a "*" target origin delivers the message to whatever page embeds
+          this app, not only the Seller app. Send to the host origin from the handshake
+          instead, or use the SDK, which already does.
+      pattern: $OBJ.postMessage($MSG, "*")
+
+    - id: xola-dynamic-script-injection
+      languages: [javascript, typescript]
+      severity: ERROR
+      message: >-
+          Loading script elements at runtime bypasses the review of what ships in the bundle,
+          and the bundle CSP (script-src 'self') blocks it anyway. Import the dependency so it
+          is part of the reviewed, size-budgeted artifact.
+      patterns:
+          - pattern-either:
+                - pattern: document.write(...)
+                - patterns:
+                      - pattern: $EL.src = $URL
+                      - pattern-inside: |
+                            $EL = document.createElement("script")
+                            ...
+
+    - id: xola-external-network-call
+      languages: [javascript, typescript]
+      severity: WARNING
+      message: >-
+          The bundle CSP restricts connect-src to the app origin and the Xola API, so a call to
+          another absolute URL fails at runtime. Use xola.fetch() for Xola API calls; anything
+          else needs a review exception.
+      patterns:
+          - pattern-either:
+                - pattern: fetch("=~/https?:\\/\\/.*/", ...)
+                - pattern: axios.get("=~/https?:\\/\\/.*/", ...)
+                - pattern: axios.post("=~/https?:\\/\\/.*/", ...)
+          - pattern-not: fetch("=~/https?:\\/\\/api\\.(sandbox\\.)?xola\\.(app|com).*/", ...)
+
+    - id: xola-innerhtml-assignment
+      languages: [javascript, typescript]
+      severity: WARNING
+      message: >-
+          Assigning innerHTML renders unescaped markup. Embedded apps display seller and
+          customer data, so this is a cross-site scripting path. Set textContent, or escape
+          the value first.
+      patterns:
+          - pattern-either:
+                - pattern: $EL.innerHTML = $VALUE
+                - pattern: $EL.outerHTML = $VALUE
+          - pattern-not: $EL.innerHTML = "..."
