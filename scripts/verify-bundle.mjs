@@ -12,7 +12,7 @@
 // registry's value without a sha256 preimage.
 //
 // Usage:
-//   node verify-bundle.mjs <distDir|https://base/url> [--expect-sha <sha>] [--cookie <str>]
+//   node verify-bundle.mjs <distDir|https://base/url> [--expect-sha <sha>] [--cookie <str>] [--no-bust]
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -21,6 +21,7 @@ const args = process.argv.slice(2);
 const source = args[0];
 const expectSha = valueOf("--expect-sha");
 const cookie = valueOf("--cookie");
+const noBust = args.includes("--no-bust");
 
 function valueOf(flag) {
     const index = args.indexOf(flag);
@@ -33,13 +34,30 @@ function sha256(buffer) {
 
 const isRemote = /^https?:\/\//.test(source || "");
 
+// A CDN edge holds several cached variants of one object, keyed on
+// Accept-Encoding among other things. If a content path is ever rewritten,
+// those variants refresh at different times, so a reader can get a mix of old
+// and new files and see a mismatch that does not exist in the bucket. Observed
+// live on 2026-08-07 after the same gitSha was rebuilt.
+//
+// The nonce and the no-cache headers are best effort only. They do NOT work
+// against the current distribution, whose cache policy excludes query strings
+// and ignores viewer Cache-Control. Treat a remote FAIL as a signal to re-check
+// the origin, not as proof of tampering. The origin bucket is authoritative:
+// point this script at a local copy synced from S3 for a verdict no cache can
+// influence.
+const nonce = process.hrtime.bigint().toString(36);
+
 async function readFile(rel) {
     if (!isRemote) {
         return fs.readFileSync(path.join(source, rel));
     }
 
-    const url = `${source.replace(/\/$/, "")}/${rel}`;
-    const response = await fetch(url, { headers: cookie ? { Cookie: cookie } : {} });
+    const separator = rel.includes("?") ? "&" : "?";
+    const url = `${source.replace(/\/$/, "")}/${rel}${noBust ? "" : `${separator}verify=${nonce}`}`;
+    const response = await fetch(url, {
+        headers: { ...(cookie ? { Cookie: cookie } : {}), "Cache-Control": "no-cache", Pragma: "no-cache" },
+    });
 
     if (!response.ok) {
         throw new Error(`${rel}: HTTP ${response.status}`);
@@ -111,6 +129,9 @@ const fileCount = Object.keys(checksums.files).length;
 if (failures.length) {
     console.error(`FAIL: ${failures.length} problem(s) across ${fileCount} file(s):`);
     failures.forEach((failure) => console.error(`  - ${failure}`));
+    if (isRemote) {
+        console.error("Source is a CDN. Re-check against the origin bucket before calling this tampering.");
+    }
     process.exit(1);
 }
 
