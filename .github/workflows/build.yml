@@ -181,15 +181,16 @@ jobs:
                   BUNDLE_SHA=$(node -p "require('./bundle-info.json').bundleSha256")
                   if [ "${{ inputs.channel }}" = "release" ]; then
                       KEY="${{ inputs.appId }}/${BUNDLE_SHA}"
-                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/${KEY}/"
+                      PREFIX="${KEY}/"
                   else
                       # The preview distribution has origin_path /preview, so the
                       # public path omits that prefix.
                       KEY="${{ inputs.appId }}/${{ inputs.gitSha }}"
-                      DEST="s3://${{ vars.ARTIFACT_BUCKET }}/preview/${KEY}/"
+                      PREFIX="preview/${KEY}/"
                   fi
                   echo "ARTIFACT_KEY=${KEY}" >> "$GITHUB_ENV"
-                  echo "ARTIFACT_DEST=${DEST}" >> "$GITHUB_ENV"
+                  echo "ARTIFACT_PREFIX=${PREFIX}" >> "$GITHUB_ENV"
+                  echo "ARTIFACT_DEST=s3://${{ vars.ARTIFACT_BUCKET }}/${PREFIX}" >> "$GITHUB_ENV"
 
             # Content paths are immutable: the whole design assumes the bytes at
             # a path never change, which is what lets the CDN cache them for a
@@ -204,9 +205,20 @@ jobs:
             - name: Refuse to overwrite an immutable content path
               if: vars.AWS_UPLOAD_ROLE_ARN != '' && !inputs.allowOverwrite
               run: |
-                  EXISTING=$(aws s3 ls "$ARTIFACT_DEST" --recursive | wc -l)
-                  if [ "$EXISTING" -gt 0 ]; then
-                      echo "FAIL: $ARTIFACT_DEST already holds $EXISTING object(s)."
+                  # Fail closed. An earlier version piped `aws s3 ls` into wc -l,
+                  # so an AccessDenied printed to stderr left an empty stdout,
+                  # wc reported 0, and the pipe hid the exit code: the guard
+                  # announced the path was free and the upload proceeded. A check
+                  # that cannot run must stop the build, never wave it through.
+                  set -o pipefail
+                  EXISTING=$(aws s3api list-objects-v2 \
+                      --bucket "${{ vars.ARTIFACT_BUCKET }}" \
+                      --prefix "$ARTIFACT_PREFIX" \
+                      --max-keys 1 \
+                      --query 'length(Contents || `[]`)' \
+                      --output text)
+                  if [ "$EXISTING" != "0" ]; then
+                      echo "FAIL: $ARTIFACT_DEST already holds at least one object."
                       echo "Content paths are immutable. Rebuilding the same input produces"
                       echo "different bytes (builtAt and the run URL are stamped in), so"
                       echo "overwriting would leave the CDN serving a mix of old and new files."

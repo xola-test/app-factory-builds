@@ -57,6 +57,17 @@ data "aws_iam_policy_document" "pipeline_upload" {
     actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
     resources = ["${aws_s3_bucket.artifacts.arn}/*"]
   }
+
+  # The pipeline checks whether a content path is already occupied before it
+  # writes, because content paths are immutable (PHASE-3 section 3.3). That
+  # check needs ListBucket, which is a bucket-level action and so cannot be
+  # limited to a prefix through the resource ARN. Without it the check cannot
+  # run at all, and a guard that cannot run is worse than no guard.
+  statement {
+    sid       = "CheckContentPathIsFree"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.artifacts.arn]
+  }
 }
 
 resource "aws_iam_role" "pipeline_upload" {
