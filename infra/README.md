@@ -47,6 +47,15 @@ aws_secret_access_key = ...
 
 Then `export AWS_PROFILE=xola-embedded-apps` before running Terraform.
 
+With the profile set, verify a published bundle against the origin rather than
+the CDN. A CDN read can return a stale variant and report a mismatch that does
+not exist in the bucket (WC-9):
+
+```sh
+aws s3 sync s3://xola-embedded-apps-<env>/<appId>/<bundleSha256>/ ./bundle-check
+node ../scripts/verify-bundle.mjs ./bundle-check --expect-sha <bundleSha256>
+```
+
 Such a key can read and write the whole bucket, so treat it as a local admin
 credential. Never commit it, never put it in `environments/*.tfvars` (those
 are tracked, and this repo is public), and delete keys that are no longer in
