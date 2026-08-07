@@ -52,6 +52,11 @@ on:
                 description: Public CDN base for this channel, used to report bundleUrl (omit to skip)
                 required: false
                 type: string
+            allowOverwrite:
+                description: Replace an existing content path (normally refused; invalidate the CDN after)
+                required: false
+                default: false
+                type: boolean
 
 permissions:
     contents: read
@@ -170,7 +175,7 @@ jobs:
                   role-to-assume: ${{ vars.AWS_UPLOAD_ROLE_ARN }}
                   aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-            - name: Upload bundle to S3
+            - name: Resolve the artifact content path
               if: vars.AWS_UPLOAD_ROLE_ARN != ''
               run: |
                   BUNDLE_SHA=$(node -p "require('./bundle-info.json').bundleSha256")
@@ -183,10 +188,47 @@ jobs:
                       KEY="${{ inputs.appId }}/${{ inputs.gitSha }}"
                       DEST="s3://${{ vars.ARTIFACT_BUCKET }}/preview/${KEY}/"
                   fi
-                  aws s3 cp target/dist "$DEST" --recursive
-                  echo "uploaded to $DEST"
+                  echo "ARTIFACT_KEY=${KEY}" >> "$GITHUB_ENV"
+                  echo "ARTIFACT_DEST=${DEST}" >> "$GITHUB_ENV"
+
+            # Content paths are immutable: the whole design assumes the bytes at
+            # a path never change, which is what lets the CDN cache them for a
+            # year and lets a recorded bundleSha256 stay meaningful.
+            #
+            # Rebuilding the same input does NOT reproduce the same bytes. The
+            # stamped manifest carries builtAt and the run URL, so the manifest
+            # and checksums.json differ on every run while bundleSha256 does
+            # not. Overwriting therefore leaves the CDN serving a mix of old and
+            # new files, one cached variant per Accept-Encoding, which reads as
+            # tampering to bundle verification. Observed live on 2026-08-07.
+            - name: Refuse to overwrite an immutable content path
+              if: vars.AWS_UPLOAD_ROLE_ARN != '' && !inputs.allowOverwrite
+              run: |
+                  EXISTING=$(aws s3 ls "$ARTIFACT_DEST" --recursive | wc -l)
+                  if [ "$EXISTING" -gt 0 ]; then
+                      echo "FAIL: $ARTIFACT_DEST already holds $EXISTING object(s)."
+                      echo "Content paths are immutable. Rebuilding the same input produces"
+                      echo "different bytes (builtAt and the run URL are stamped in), so"
+                      echo "overwriting would leave the CDN serving a mix of old and new files."
+                      echo ""
+                      echo "If the published artifact is already correct, no build is needed."
+                      echo "To replace it deliberately, re-dispatch with allowOverwrite: true"
+                      echo "and invalidate the distribution afterwards."
+                      exit 1
+                  fi
+                  echo "$ARTIFACT_DEST is empty; safe to upload."
+
+            - name: Upload bundle to S3
+              if: vars.AWS_UPLOAD_ROLE_ARN != ''
+              run: |
+                  if [ "${{ inputs.allowOverwrite }}" = "true" ]; then
+                      echo "WARNING: allowOverwrite is set. Replacing an immutable content path."
+                      echo "Invalidate the distribution, or the CDN will serve a mix of old and new."
+                  fi
+                  aws s3 cp target/dist "$ARTIFACT_DEST" --recursive
+                  echo "uploaded to $ARTIFACT_DEST"
                   if [ -n "${{ inputs.cdnBase }}" ]; then
-                      echo "BUNDLE_URL=${{ inputs.cdnBase }}/${KEY}/index.html" >> "$GITHUB_ENV"
+                      echo "BUNDLE_URL=${{ inputs.cdnBase }}/${ARTIFACT_KEY}/index.html" >> "$GITHUB_ENV"
                   fi
 
             - name: Report result to elrond
