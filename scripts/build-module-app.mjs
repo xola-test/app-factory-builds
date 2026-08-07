@@ -1,0 +1,190 @@
+// The Mode B build wrapper (WC-8). PHASE-3 section 3.2 defines two source
+// modes. Mode A is bring-your-own-static: the author's own build writes
+// dist/index.html. Mode B is the Xola module app: the author exports
+// mount(el, xola) and optionally unmount(), and this script generates the
+// HTML entrypoint and the SDK bootstrap around it, then builds with a
+// pipeline-provided vite config.
+//
+// Both modes end at the same artifact: dist/index.html + hashed assets +
+// dist/xola-embedded-app.json. Every later pipeline step is mode-blind.
+//
+// The manifest's moduleEntry property is the only mode signal
+// (CONTRACT-DECISIONS M11). vite is a dependency of THIS repo, so a target
+// repo needs no build tooling of its own. The SDK is not: the generated
+// bootstrap imports @xola/embedded-app-sdk, which resolves from the target's
+// own node_modules, so the target must declare it.
+//
+// Usage: node build-module-app.mjs <targetDir> [--out-dir <distDir>]
+import fs from "fs";
+import path from "path";
+import { build } from "vite";
+
+const SDK_PACKAGE = "@xola/embedded-app-sdk";
+const SCRATCH_DIR = ".xola-build";
+
+const args = process.argv.slice(2);
+const targetDir = path.resolve(args[0] || ".");
+const outDir = path.resolve(targetDir, valueOf("--out-dir") || "dist");
+
+function valueOf(flag) {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+}
+
+function fail(message) {
+    console.error(`FAIL: ${message}`);
+    process.exit(1);
+}
+
+function readJson(file) {
+    try {
+        return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+        fail(`Could not read ${file}: ${error.message}`);
+    }
+}
+
+// 1. The manifest decides the mode. No moduleEntry means Mode A, and the
+// caller should have run the target's own build instead. That is a caller
+// mistake, not a build failure, so exit 0 with an explanation.
+const manifestPath = path.join(targetDir, "xola-embedded-app.json");
+if (!fs.existsSync(manifestPath)) {
+    fail(`Manifest not found at ${manifestPath}. Every app repo must carry xola-embedded-app.json at its root.`);
+}
+const manifest = readJson(manifestPath);
+
+if (!manifest.moduleEntry) {
+    console.log(
+        "This app has no moduleEntry, so it is a Mode A (bring-your-own-static) app. " +
+            "Run the target's own build instead. Nothing to do.",
+    );
+    process.exit(0);
+}
+
+// 2. Guard the path even though the schema also constrains it: this script
+// can be run directly, and a path escape would build a file outside the repo.
+const moduleEntry = manifest.moduleEntry;
+if (moduleEntry.startsWith("/") || moduleEntry.split("/").includes("..")) {
+    fail(`moduleEntry "${moduleEntry}" must be a repo-relative path with no leading slash and no "..".`);
+}
+const modulePath = path.join(targetDir, moduleEntry);
+if (!fs.existsSync(modulePath)) {
+    fail(`moduleEntry "${moduleEntry}" does not exist in the target repo.`);
+}
+
+// 3. The generated bootstrap imports the SDK, and that import resolves from
+// the target's own node_modules. A missing declaration fails later inside
+// vite with an unhelpful message, so check it here.
+const packageJsonPath = path.join(targetDir, "package.json");
+const packageJson = fs.existsSync(packageJsonPath) ? readJson(packageJsonPath) : {};
+const declaredDeps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+if (!declaredDeps[SDK_PACKAGE]) {
+    fail(
+        `A module app must declare ${SDK_PACKAGE} in package.json dependencies. ` +
+            `The generated bootstrap imports it and it resolves from the target's node_modules. ` +
+            `Add it with: npm install ${SDK_PACKAGE}`,
+    );
+}
+
+// 4. Generate the entrypoint and the bootstrap into a scratch directory
+// inside the target. The directory is the vite root, so the generated
+// index.html lands at the top of outDir where the bundle contract wants it.
+const scratchDir = path.join(targetDir, SCRATCH_DIR);
+fs.rmSync(scratchDir, { recursive: true, force: true });
+fs.mkdirSync(scratchDir, { recursive: true });
+
+// Relative from the scratch dir to the author's module, in posix form so the
+// generated import works on every platform.
+const moduleImport = ensureRelative(path.relative(scratchDir, modulePath).split(path.sep).join("/"));
+
+function ensureRelative(specifier) {
+    return specifier.startsWith(".") ? specifier : `./${specifier}`;
+}
+
+const indexHtml = `<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Xola Embedded App</title>
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="./bootstrap.js"></script>
+    </body>
+</html>
+`;
+
+// The module's exports cannot be checked statically at build time (a module
+// can assign them at runtime), so the bootstrap checks at startup and says
+// what is wrong in the iframe itself rather than only in the console.
+const bootstrapJs = `// GENERATED by app-factory-builds/scripts/build-module-app.mjs (PHASE-3
+// section 3.2 Mode B). Do not edit: this file is rewritten on every build.
+import { initXola } from ${JSON.stringify(SDK_PACKAGE)};
+import * as app from ${JSON.stringify(moduleImport)};
+
+const root = document.getElementById("root");
+
+function showFailure(message) {
+    if (root) {
+        root.textContent = "This app failed to start: " + message;
+    }
+}
+
+if (typeof app.mount !== "function") {
+    const message =
+        ${JSON.stringify(moduleEntry)} +
+        " must export a mount(el, xola) function." +
+        " It is declared as moduleEntry in xola-embedded-app.json.";
+    showFailure(message);
+    throw new Error(message);
+}
+
+// apiVersion comes from the manifest, so the pin lives in one place.
+const xola = initXola({ apiVersion: ${JSON.stringify(manifest.apiVersion)} });
+
+if (typeof app.unmount === "function") {
+    // pagehide, not unload: it also fires when the page enters the back /
+    // forward cache, and unload does not run reliably in modern browsers.
+    window.addEventListener("pagehide", () => app.unmount(), { once: true });
+}
+
+Promise.resolve(app.mount(root, xola)).catch((error) => showFailure(error.message));
+`;
+
+fs.writeFileSync(path.join(scratchDir, "index.html"), indexHtml);
+fs.writeFileSync(path.join(scratchDir, "bootstrap.js"), bootstrapJs);
+
+// 5. Build with the pipeline's config, never the target's. configFile: false
+// keeps an author's vite.config.js from changing base, outDir, or plugins.
+const publicDir = path.join(targetDir, "public");
+
+await build({
+    configFile: false,
+    root: scratchDir,
+    // Bundles are served from a hashed CDN subpath
+    // (https://embeddedapps.{env}.xola.app/<appId>/<sha>/index.html), so
+    // absolute asset paths would 404. Every reference must be relative.
+    base: "./",
+    publicDir: fs.existsSync(publicDir) ? publicDir : false,
+    logLevel: "info",
+    build: {
+        outDir,
+        // outDir is outside the vite root, so vite requires this to be explicit.
+        emptyOutDir: true,
+        sourcemap: false,
+    },
+});
+
+// 6. Copy the manifest into dist exactly as the Mode A template's build step
+// does. The repo-root copy stays the authored source of truth; CI stamps the
+// build block into the dist copy later (CONTRACT-DECISIONS M4).
+fs.copyFileSync(manifestPath, path.join(outDir, "xola-embedded-app.json"));
+
+const entry = path.join(outDir, "index.html");
+if (!fs.existsSync(entry)) {
+    fail(`The build did not produce ${entry}. The bundle contract requires index.html at the top of dist.`);
+}
+
+console.log(`Module app built: ${path.relative(targetDir, entry)} + xola-embedded-app.json from ${moduleEntry}.`);
+console.log(`Generated entrypoint and bootstrap are kept in ${SCRATCH_DIR}/ for debugging.`);

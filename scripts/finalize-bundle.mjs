@@ -60,11 +60,22 @@ manifest.build = {
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 4) + "\n");
 
 // 3. checksums.json covers every final file, including the stamped manifest.
+//
+// preStampManifestSha256 is the manifest hash that bundleSha256 actually
+// covered, before step 2 rewrote the file. Without it bundleSha256 cannot be
+// recomputed from what the CDN serves, so an auditor could only compare a
+// claimed hash against itself (WC-9; scripts/verify-bundle.mjs).
 const checksums = {};
 for (const entry of entries) {
     checksums[entry.rel] = sha256(fs.readFileSync(entry.full));
 }
-fs.writeFileSync(path.join(distDir, "checksums.json"), JSON.stringify({ bundleSha256, files: checksums }, null, 4));
+const preStampManifestSha256 = manifestLines
+    .find((line) => line.startsWith("xola-embedded-app.json:"))
+    ?.split(":")[1];
+fs.writeFileSync(
+    path.join(distDir, "checksums.json"),
+    JSON.stringify({ bundleSha256, preStampManifestSha256, files: checksums }, null, 4),
+);
 
 if (outPath) {
     fs.writeFileSync(outPath, JSON.stringify({ bundleSha256, fileCount: entries.length }, null, 4));

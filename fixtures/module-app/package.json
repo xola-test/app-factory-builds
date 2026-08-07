@@ -1,0 +1,13 @@
+{
+    "name": "fixture-module-app",
+    "private": true,
+    "version": "0.1.0",
+    "description": "Mode B fixture: exercises scripts/build-module-app.mjs locally (PHASE-3 WC-8)",
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "dependencies": {
+        "@xola/embedded-app-sdk": "^0.2.0"
+    }
+}

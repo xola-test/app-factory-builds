@@ -41,7 +41,14 @@
             "type": "string",
             "pattern": "^[^/].*\\.html$",
             "default": "index.html",
-            "description": "Bundle-relative path to the iframe entrypoint document. Almost always the default \"index.html\". Must be a path inside the bundle (no leading slash, no ..)."
+            "description": "Bundle-relative path to the iframe entrypoint document. Almost always the default \"index.html\". Must be a path inside the bundle (no leading slash, no ..). For a module app (see moduleEntry) CI generates this document, so the value is always \"index.html\"."
+        },
+        "moduleEntry": {
+            "type": "string",
+            "pattern": "^(?!.*\\.\\.)[^/].*\\.(js|mjs|jsx|ts|tsx)$",
+            "maxLength": 256,
+            "description": "Repo-relative path to a JavaScript module that exports mount(el, xola) and, optionally, unmount(). Its presence is what makes an app a module app (PHASE-3 section 3.2 Mode B): CI generates the HTML entrypoint and the SDK bootstrap around this module, so `entry` refers to that generated index.html and the author never writes one. Omit this property for a bring-your-own-static app (Mode A), where the author's own build produces the entrypoint. Must be a source path inside the repo (no leading slash, no ..). Both modes publish the same bundle structure.",
+            "examples": ["src/app.js", "src/main.ts"]
         },
         "triggers": {
             "type": "array",

@@ -110,7 +110,30 @@ jobs:
               working-directory: pipeline
               run: node scripts/validate-manifest.mjs ../target/xola-embedded-app.json --app-id "${{ inputs.appId }}" ${{ inputs.registryUrl && format('--registry-url {0}', inputs.registryUrl) || '' }}
 
-            - name: Build
+            # Two source modes, one artifact (PHASE-3 section 3.2). Mode B (a
+            # module app: the manifest declares moduleEntry) is built by the
+            # pipeline's wrapper, which generates the HTML entrypoint and the
+            # SDK bootstrap. Mode A runs the target's own build. The modes
+            # converge on the same dist/ deliberately, so every step below
+            # this point is identical for both and needs no mode check.
+            - name: Detect build mode
+              id: mode
+              run: |
+                  if node -p "!!require('./target/xola-embedded-app.json').moduleEntry" | grep -q true; then
+                      echo "module=true" >> "$GITHUB_OUTPUT"
+                      echo "Mode B: module app (manifest declares moduleEntry)."
+                  else
+                      echo "module=false" >> "$GITHUB_OUTPUT"
+                      echo "Mode A: bring-your-own-static app."
+                  fi
+
+            - name: Build (Mode B, Xola module app)
+              if: steps.mode.outputs.module == 'true'
+              working-directory: pipeline
+              run: node scripts/build-module-app.mjs ../target
+
+            - name: Build (Mode A, target's own build)
+              if: steps.mode.outputs.module == 'false'
               working-directory: target
               run: npm run build
 

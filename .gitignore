@@ -1,4 +1,7 @@
 node_modules/
+# Build output of the Mode B fixture (fixtures/module-app).
+fixtures/*/dist/
+fixtures/*/.xola-build/
 infra/.terraform/
 *.tfstate*
 infra/environments/*.tfvars
