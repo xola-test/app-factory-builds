@@ -3,3 +3,4 @@ infra/.terraform/
 *.tfstate*
 infra/environments/*.tfvars
 infra/aws.env
+infra/secrets/

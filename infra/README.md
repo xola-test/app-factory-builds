@@ -39,7 +39,22 @@ upload step activates on the next run.
 - **Preview access (W0-7)**: provide `preview_public_key_pem` to require
   CloudFront signed cookies on the preview distribution. Omitting it leaves
   preview open and prints a warning output; only acceptable for a throwaway
-  test environment. The cookie-minting endpoint is WC-7.
+  test environment. Cookies are minted by the app-factory service at
+  `GET /v1/apps/:appId/preview-access`, which authorizes through the app
+  linkage first.
+
+  Generate the pair, keep the private half for that service, and put only the
+  public half here:
+
+  ```sh
+  openssl genrsa -out preview-signer.pem 2048
+  openssl rsa -pubout -in preview-signer.pem -out preview-signer.pub
+  ```
+
+  Verified live in the sandbox account (2026-08-07): with the key group
+  attached, a preview URL returns 403 with no cookies, 200 with cookies
+  minted for that app, and 403 with cookies minted for a different app. That
+  last case is the point: a cookie cannot read another app's preview.
 - **Custom domains**: set `release_aliases`/`preview_aliases` plus
   `acm_certificate_arn` (us-east-1). Without them the distributions serve on
   default cloudfront.net domains, which is enough for pipeline testing.
