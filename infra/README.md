@@ -19,6 +19,43 @@ Reads go only through CloudFront (Origin Access Control); writes go only
 through the pipeline role (`AssumeRoleWithWebIdentity`, trust limited to
 `repo:<pipeline_repo>:*`).
 
+## Credentials
+
+Terraform needs AWS credentials. The pipeline does not.
+
+**The pipeline has no AWS keys and must not be given any.** It authenticates
+with GitHub OIDC: the workflow assumes `AWS_UPLOAD_ROLE_ARN` and receives
+credentials that expire in an hour and are pinned to this repository (see
+`iam.tf`). The three AWS entries in the repository's Actions settings are
+**variables**, not secrets: `AWS_UPLOAD_ROLE_ARN`, `AWS_REGION`, and
+`ARTIFACT_BUCKET`. None is a credential. The only Actions secret is
+`APP_FACTORY_PRIVATE_KEY`, which is the GitHub App key. Putting a long-lived
+access key in Actions would replace short-lived scoped credentials with a
+permanent one that can write the artifact bucket, which is the failure this
+design exists to prevent.
+
+An access key is for an operator's own machine, for two jobs: running
+`terraform apply`, and reading objects from the bucket directly to verify a
+published bundle at the origin (`scripts/verify-bundle.mjs` reads a CDN copy,
+which can be stale; see WC-9). Put it in `~/.aws/credentials`:
+
+```ini
+[xola-embedded-apps]
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
+```
+
+Then `export AWS_PROFILE=xola-embedded-apps` before running Terraform.
+
+Such a key can read and write the whole bucket, so treat it as a local admin
+credential. Never commit it, never put it in `environments/*.tfvars` (those
+are tracked, and this repo is public), and delete keys that are no longer in
+use rather than leaving them disabled.
+
+No Xola service needs AWS credentials at run time. The app-factory service
+signs preview cookies with the CloudFront private key, which is a separate
+secret held under `infra/secrets/` and gitignored.
+
 ## Apply
 
 ```sh
